@@ -1,10 +1,15 @@
 #!/usr/bin/env python3
 """Route Linux media keys to Tihulu Media Source Controller.
 
-This daemon listens to every readable /dev/input/event* device that reports
-media keys. By default it does NOT grab devices, so it is safe but the desktop
-may still also receive the same key. Set TMSC_MEDIA_KEY_GRAB=1 only after you
-know the selected devices are safe to grab.
+The daemon listens to readable /dev/input/event* devices that report media keys.
+It de-duplicates the same physical key press when multiple event devices report it.
+
+Environment:
+  TMSC_COMMAND=/usr/bin/tihulu-media-source-controller
+  TMSC_MEDIA_KEY_GRAB=0|1
+  TMSC_MEDIA_KEY_DEVICES=/dev/input/event5:/dev/input/event6
+  TMSC_MEDIA_KEY_NAMES=Telink Wireless Gaming Keyboard,Consumer Control
+  TMSC_MEDIA_KEY_DEBOUNCE=0.45
 """
 
 import os
@@ -13,7 +18,7 @@ import signal
 import subprocess
 import sys
 import time
-from typing import Dict, Iterable, List, Optional, Tuple
+from typing import Iterable, List, Optional
 
 try:
     from evdev import InputDevice, ecodes, list_devices
@@ -25,7 +30,8 @@ except Exception as error:  # pragma: no cover
 APP_COMMAND = os.environ.get("TMSC_COMMAND", "/usr/bin/tihulu-media-source-controller")
 GRAB = os.environ.get("TMSC_MEDIA_KEY_GRAB", "0") == "1"
 DEVICE_FILTER = os.environ.get("TMSC_MEDIA_KEY_DEVICES", "").strip()
-DEBOUNCE_SECONDS = float(os.environ.get("TMSC_MEDIA_KEY_DEBOUNCE", "0.18"))
+NAME_FILTER = os.environ.get("TMSC_MEDIA_KEY_NAMES", "").strip()
+DEBOUNCE_SECONDS = float(os.environ.get("TMSC_MEDIA_KEY_DEBOUNCE", "0.45"))
 
 KEY_ACTIONS = {
     ecodes.KEY_PLAYPAUSE: "play-pause",
@@ -56,6 +62,12 @@ def wanted_paths() -> Optional[List[str]]:
     return [path.strip() for path in DEVICE_FILTER.split(":") if path.strip()]
 
 
+def wanted_names() -> List[str]:
+    if not NAME_FILTER:
+        return []
+    return [name.strip().lower() for name in NAME_FILTER.split(",") if name.strip()]
+
+
 def key_capabilities(dev: InputDevice) -> Iterable[int]:
     caps = dev.capabilities().get(ecodes.EV_KEY, [])
     for key in caps:
@@ -66,6 +78,9 @@ def key_capabilities(dev: InputDevice) -> Iterable[int]:
 
 
 def is_candidate(dev: InputDevice) -> bool:
+    names = wanted_names()
+    if names and not any(name in dev.name.lower() for name in names):
+        return False
     keys = set(key_capabilities(dev))
     return any(key in keys for key in KEY_ACTIONS)
 
@@ -131,8 +146,8 @@ def main() -> int:
     for dev in devices:
         selector.register(dev.fd, selectors.EVENT_READ, dev)
 
-    last_seen: Dict[Tuple[str, int], float] = {}
-    log(f"media-key daemon running; grab={'on' if GRAB else 'off'}")
+    last_action_at = {}
+    log(f"media-key daemon running; grab={'on' if GRAB else 'off'}; debounce={DEBOUNCE_SECONDS}s")
 
     while RUNNING:
         for key, _mask in selector.select(timeout=0.5):
@@ -155,10 +170,10 @@ def main() -> int:
                     continue
 
                 now = time.monotonic()
-                event_key = (dev.path, event.code)
-                if now - last_seen.get(event_key, 0.0) < DEBOUNCE_SECONDS:
+                if now - last_action_at.get(action, 0.0) < DEBOUNCE_SECONDS:
+                    log(f"{dev.path} [{dev.name}]: duplicate {action} ignored")
                     continue
-                last_seen[event_key] = now
+                last_action_at[action] = now
                 run_action(action, f"{dev.path} [{dev.name}]")
 
     for dev in devices:
