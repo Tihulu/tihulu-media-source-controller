@@ -1,4 +1,4 @@
-# COSMIC Media Source Controller
+# Tihulu Media Source Controller
 
 A Pop!_OS / COSMIC applet concept for choosing exactly which media source your keyboard media keys control.
 
@@ -7,7 +7,7 @@ The idea is simple: choose one active source, then **Previous**, **Play/Pause**,
 ## One-line install
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/Tihulu/cosmic-media-source-controller/main/scripts/install.sh | bash
+curl -fsSL https://raw.githubusercontent.com/Tihulu/tihulu-media-source-controller/main/scripts/install.sh | bash
 ```
 
 The installer works on Pop!_OS and other apt-based distributions. It installs the required packages, clones the repository, builds the release binary, and installs it to `/usr/local/bin`.
@@ -80,8 +80,8 @@ There is no switch for whether media keys are captured. The entire app exists to
 sudo apt update
 sudo apt install -y git playerctl libnotify-bin cargo
 
-git clone https://github.com/Tihulu/cosmic-media-source-controller.git
-cd cosmic-media-source-controller
+git clone https://github.com/Tihulu/tihulu-media-source-controller.git
+cd tihulu-media-source-controller
 ./scripts/install.sh
 ```
 
@@ -90,28 +90,28 @@ cd cosmic-media-source-controller
 List available media sources:
 
 ```bash
-cosmic-media-source-controller list
+tihulu-media-source-controller list
 ```
 
 Select Spotify:
 
 ```bash
-cosmic-media-source-controller set spotify
+tihulu-media-source-controller set spotify
 ```
 
 Control the selected source:
 
 ```bash
-cosmic-media-source-controller play-pause
-cosmic-media-source-controller next
-cosmic-media-source-controller previous
-cosmic-media-source-controller stop
+tihulu-media-source-controller play-pause
+tihulu-media-source-controller next
+tihulu-media-source-controller previous
+tihulu-media-source-controller stop
 ```
 
 Cycle to the next source:
 
 ```bash
-cosmic-media-source-controller cycle
+tihulu-media-source-controller cycle
 ```
 
 ## Recommended keyboard shortcuts
@@ -120,11 +120,11 @@ Until the native COSMIC applet is implemented, bind these commands in desktop ke
 
 | Action | Command |
 | --- | --- |
-| Play / Pause | `cosmic-media-source-controller play-pause` |
-| Next Track | `cosmic-media-source-controller next` |
-| Previous Track | `cosmic-media-source-controller previous` |
-| Stop | `cosmic-media-source-controller stop` |
-| Next Source | `cosmic-media-source-controller cycle` |
+| Play / Pause | `tihulu-media-source-controller play-pause` |
+| Next Track | `tihulu-media-source-controller next` |
+| Previous Track | `tihulu-media-source-controller previous` |
+| Stop | `tihulu-media-source-controller stop` |
+| Next Source | `tihulu-media-source-controller cycle` |
 
 ## Architecture
 
