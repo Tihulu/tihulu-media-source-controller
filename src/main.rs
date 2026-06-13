@@ -4,6 +4,7 @@ use cosmic::iced::platform_specific::shell::wayland::commands::popup::{destroy_p
 use cosmic::iced::{Alignment, Length, Limits, Subscription, window::Id};
 use cosmic::prelude::*;
 use cosmic::widget;
+use eframe::{egui, NativeOptions};
 use notify_rust::Notification;
 use serde::{Deserialize, Serialize};
 use std::{fs, path::PathBuf, process::Command};
@@ -21,14 +22,25 @@ struct Cli {
 
 #[derive(Subcommand, Debug)]
 enum Commands {
+    /// Open the full desktop GUI window.
+    Gui,
+    /// List available MPRIS media players reported by playerctl.
     List,
+    /// Show the currently selected media source.
     Active,
+    /// Select the active media source.
     Set { source: String },
+    /// Send Play/Pause to the selected source.
     PlayPause,
+    /// Send Next to the selected source.
     Next,
+    /// Send Previous to the selected source.
     Previous,
+    /// Send Stop to the selected source.
     Stop,
+    /// Toggle between available sources.
     Cycle,
+    /// Print the config file path.
     ConfigPath,
 }
 
@@ -69,12 +81,20 @@ impl SourceInfo {
         if !self.artist.is_empty() {
             parts.push(self.artist.clone());
         }
-        if parts.is_empty() { "No metadata".to_string() } else { parts.join(" • ") }
+        if parts.is_empty() {
+            "No metadata".to_string()
+        } else {
+            parts.join(" • ")
+        }
+    }
+
+    fn is_playing(&self) -> bool {
+        self.status.eq_ignore_ascii_case("Playing")
     }
 }
 
 #[derive(Default)]
-struct AppModel {
+struct AppletModel {
     core: cosmic::Core,
     popup: Option<Id>,
     config: Config,
@@ -83,7 +103,7 @@ struct AppModel {
 }
 
 #[derive(Debug, Clone)]
-enum Message {
+enum AppletMessage {
     TogglePopup,
     PopupClosed(Id),
     Refresh,
@@ -94,23 +114,32 @@ enum Message {
     Stop,
 }
 
+struct DesktopGui {
+    config: Config,
+    sources: Vec<SourceInfo>,
+    status: String,
+}
+
 fn main() -> cosmic::iced::Result {
-    let cli_subcommand = std::env::args().nth(1).is_some_and(|arg| {
-        matches!(
-            arg.as_str(),
-            "list" | "active" | "set" | "play-pause" | "next" | "previous" | "stop" | "cycle" | "config-path"
-        )
-    });
+    let first = std::env::args().nth(1);
 
-    if cli_subcommand {
-        if let Err(error) = run_cli() {
-            eprintln!("{error}");
-            std::process::exit(1);
+    match first.as_deref() {
+        None | Some("gui") => {
+            if let Err(error) = run_desktop_gui() {
+                eprintln!("{error}");
+                std::process::exit(1);
+            }
+            Ok(())
         }
-        return Ok(());
+        Some("list" | "active" | "set" | "play-pause" | "next" | "previous" | "stop" | "cycle" | "config-path") => {
+            if let Err(error) = run_cli() {
+                eprintln!("{error}");
+                std::process::exit(1);
+            }
+            Ok(())
+        }
+        _ => cosmic::applet::run::<AppletModel>(()),
     }
-
-    cosmic::applet::run::<AppModel>(())
 }
 
 fn run_cli() -> Result<()> {
@@ -118,6 +147,7 @@ fn run_cli() -> Result<()> {
     let mut config = load_config()?;
 
     match cli.command {
+        Commands::Gui => run_desktop_gui()?,
         Commands::List => {
             for source in list_sources()? {
                 let marker = if config.active_source.as_deref() == Some(&source) { "*" } else { " " };
@@ -140,20 +170,182 @@ fn run_cli() -> Result<()> {
         Commands::Stop => send_to_active(&config, "stop")?,
         Commands::Cycle => {
             let sources = list_sources()?;
-            if sources.is_empty() { return Err(anyhow!("No MPRIS media players found")); }
+            if sources.is_empty() {
+                return Err(anyhow!("No MPRIS media players found"));
+            }
             let next = next_source(config.active_source.as_deref(), &sources);
             set_active_source(&mut config, &next)?;
             println!("Active source: {next}");
         }
         Commands::ConfigPath => println!("{}", config_path()?.display()),
     }
+
     Ok(())
 }
 
-impl cosmic::Application for AppModel {
+fn run_desktop_gui() -> Result<()> {
+    let options = NativeOptions {
+        viewport: egui::ViewportBuilder::default()
+            .with_title(APP_NAME)
+            .with_inner_size([980.0, 660.0])
+            .with_min_inner_size([820.0, 560.0]),
+        ..Default::default()
+    };
+
+    eframe::run_native(
+        APP_NAME,
+        options,
+        Box::new(|cc| {
+            let mut visuals = egui::Visuals::dark();
+            visuals.override_text_color = Some(egui::Color32::from_rgb(240, 240, 245));
+            cc.egui_ctx.set_visuals(visuals);
+            Ok(Box::new(DesktopGui::new()))
+        }),
+    )
+    .map_err(|error| anyhow!(error.to_string()))
+}
+
+impl DesktopGui {
+    fn new() -> Self {
+        let mut app = Self {
+            config: load_config().unwrap_or_default(),
+            sources: Vec::new(),
+            status: "Ready".to_string(),
+        };
+        app.refresh();
+        app
+    }
+
+    fn refresh(&mut self) {
+        self.sources = list_source_info();
+        self.status = if self.sources.is_empty() {
+            "No media sources detected. Open Spotify, VLC, Firefox, or another MPRIS player.".to_string()
+        } else if let Some(active) = &self.config.active_source {
+            format!("Active source: {active}")
+        } else {
+            "Select an active media source.".to_string()
+        };
+    }
+
+    fn set_active(&mut self, source: &str) {
+        match set_active_source(&mut self.config, source) {
+            Ok(()) => {
+                self.status = format!("Media keys now control {source}.");
+                self.refresh();
+            }
+            Err(error) => self.status = error.to_string(),
+        }
+    }
+
+    fn command(&mut self, command: &str) {
+        match send_to_active(&self.config, command) {
+            Ok(()) => {
+                self.status = format!("Sent {command} to active source.");
+                self.refresh();
+            }
+            Err(error) => self.status = error.to_string(),
+        }
+    }
+
+    fn active_info(&self) -> Option<&SourceInfo> {
+        let active = self.config.active_source.as_deref()?;
+        self.sources.iter().find(|source| source.name == active)
+    }
+}
+
+impl eframe::App for DesktopGui {
+    fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
+        egui::TopBottomPanel::top("header").show(ctx, |ui| {
+            ui.horizontal(|ui| {
+                ui.heading(APP_NAME);
+                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                    if ui.button("Refresh").clicked() {
+                        self.refresh();
+                    }
+                });
+            });
+            ui.label("Choose one source. Previous, Play/Pause, Next, and Stop will target that source.");
+        });
+
+        egui::SidePanel::left("left_panel")
+            .resizable(false)
+            .exact_width(270.0)
+            .show(ctx, |ui| {
+                ui.heading("Active Source");
+                ui.add_space(6.0);
+                if let Some(info) = self.active_info() {
+                    ui.label(egui::RichText::new(&info.name).strong().size(18.0));
+                    ui.label(info.subtitle());
+                } else {
+                    ui.label(egui::RichText::new("None selected").weak());
+                }
+
+                ui.add_space(16.0);
+                ui.heading("Panel Controls");
+                ui.horizontal(|ui| {
+                    if ui.button("⏮").clicked() {
+                        self.command("previous");
+                    }
+                    if ui.button("⏯").clicked() {
+                        self.command("play-pause");
+                    }
+                    if ui.button("⏭").clicked() {
+                        self.command("next");
+                    }
+                });
+                if ui.button("Stop").clicked() {
+                    self.command("stop");
+                }
+
+                ui.add_space(16.0);
+                ui.heading("Status");
+                ui.label(&self.status);
+            });
+
+        egui::CentralPanel::default().show(ctx, |ui| {
+            ui.heading("Available Sources");
+            ui.label("These are MPRIS media sources reported by playerctl.");
+            ui.add_space(8.0);
+
+            if self.sources.is_empty() {
+                ui.group(|ui| {
+                    ui.label("No source found.");
+                    ui.label("Open Spotify, VLC, Firefox/YouTube, or another player, then click Refresh.");
+                });
+                return;
+            }
+
+            let sources = self.sources.clone();
+            egui::ScrollArea::vertical().show(ui, |ui| {
+                for source in sources {
+                    let is_active = self.config.active_source.as_deref() == Some(source.name.as_str());
+                    ui.group(|ui| {
+                        ui.horizontal(|ui| {
+                            ui.vertical(|ui| {
+                                let name = if is_active { format!("✓ {}", source.name) } else { source.name.clone() };
+                                ui.label(egui::RichText::new(name).strong().size(16.0));
+                                ui.label(source.subtitle());
+                            });
+                            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                                if is_active {
+                                    ui.label("Active");
+                                } else if ui.button("Select").clicked() {
+                                    self.set_active(&source.name);
+                                }
+                            });
+                        });
+                    });
+                    ui.add_space(6.0);
+                }
+            });
+        });
+    }
+}
+
+impl cosmic::Application for AppletModel {
     type Executor = cosmic::executor::Default;
     type Flags = ();
-    type Message = Message;
+    type Message = AppletMessage;
 
     const APP_ID: &'static str = "com.github.tihulu.TihuluMediaSourceController";
 
@@ -166,18 +358,14 @@ impl cosmic::Application for AppModel {
         (app, Task::none())
     }
 
-    fn on_close_requested(&self, id: Id) -> Option<Message> { Some(Message::PopupClosed(id)) }
+    fn on_close_requested(&self, id: Id) -> Option<AppletMessage> { Some(AppletMessage::PopupClosed(id)) }
 
     fn view(&self) -> Element<'_, Self::Message> {
-        widget::row::with_children(vec![
-            widget::button::text("⏮").on_press(Message::Previous).into(),
-            widget::button::text("⏯").on_press(Message::PlayPause).into(),
-            widget::button::text("⏭").on_press(Message::Next).into(),
-            self.core.applet.icon_button("view-list-symbolic").on_press(Message::TogglePopup).into(),
-        ])
-        .spacing(4)
-        .align_y(Alignment::Center)
-        .into()
+        self.core
+            .applet
+            .icon_button("multimedia-player-symbolic")
+            .on_press(AppletMessage::TogglePopup)
+            .into()
     }
 
     fn view_window(&self, _id: Id) -> Element<'_, Self::Message> { self.popup_content() }
@@ -185,19 +373,19 @@ impl cosmic::Application for AppModel {
 
     fn update(&mut self, message: Self::Message) -> Task<cosmic::Action<Self::Message>> {
         match message {
-            Message::TogglePopup => return self.toggle_popup(),
-            Message::PopupClosed(id) => {
+            AppletMessage::TogglePopup => return self.toggle_popup(),
+            AppletMessage::PopupClosed(id) => {
                 if self.popup.as_ref() == Some(&id) { self.popup = None; }
             }
-            Message::Refresh => self.refresh_sources(),
-            Message::SelectSource(source) => match set_active_source(&mut self.config, &source) {
+            AppletMessage::Refresh => self.refresh_sources(),
+            AppletMessage::SelectSource(source) => match set_active_source(&mut self.config, &source) {
                 Ok(()) => { self.last_action = Some(format!("Media keys now control {source}.")); self.refresh_sources(); }
                 Err(error) => self.last_action = Some(error.to_string()),
             },
-            Message::Previous => self.media_command("previous"),
-            Message::PlayPause => self.media_command("play-pause"),
-            Message::Next => self.media_command("next"),
-            Message::Stop => self.media_command("stop"),
+            AppletMessage::Previous => self.media_command("previous"),
+            AppletMessage::PlayPause => self.media_command("play-pause"),
+            AppletMessage::Next => self.media_command("next"),
+            AppletMessage::Stop => self.media_command("stop"),
         }
         Task::none()
     }
@@ -205,7 +393,7 @@ impl cosmic::Application for AppModel {
     fn style(&self) -> Option<cosmic::iced::theme::Style> { Some(cosmic::applet::style()) }
 }
 
-impl AppModel {
+impl AppletModel {
     fn refresh_sources(&mut self) { self.sources = list_source_info(); }
 
     fn media_command(&mut self, command: &str) {
@@ -215,7 +403,7 @@ impl AppModel {
         }
     }
 
-    fn toggle_popup(&mut self) -> Task<cosmic::Action<Message>> {
+    fn toggle_popup(&mut self) -> Task<cosmic::Action<AppletMessage>> {
         if let Some(id) = self.popup.take() { return destroy_popup(id); }
         self.refresh_sources();
         let id = Id::unique();
@@ -229,13 +417,13 @@ impl AppModel {
         get_popup(settings)
     }
 
-    fn popup_content(&self) -> Element<'_, Message> {
+    fn popup_content(&self) -> Element<'_, AppletMessage> {
         let active = self.config.active_source.clone().unwrap_or_else(|| "None selected".to_string());
         let mut content = widget::column::with_capacity(16)
             .spacing(12)
             .padding(14)
             .push(widget::text::title3(APP_NAME))
-            .push(widget::text("Choose which media source the panel controls."))
+            .push(widget::text("Choose which media source the media controls target."))
             .push(widget::divider::horizontal::light())
             .push(widget::text::title4(format!("Active Source: {active}")));
 
@@ -248,7 +436,7 @@ impl AppModel {
             list = list.push(widget::container(widget::text("No MPRIS players found. Start Spotify, VLC, Firefox, or another media app, then refresh.")).padding(10));
         } else {
             for source in &self.sources {
-                list = list.push(source_row(source, self.config.active_source.as_deref() == Some(source.name.as_str())));
+                list = list.push(applet_source_row(source, self.config.active_source.as_deref() == Some(source.name.as_str())));
             }
         }
 
@@ -256,22 +444,22 @@ impl AppModel {
             .push(widget::scrollable(list).height(Length::Fixed(360.0)).width(Length::Fill))
             .push(widget::divider::horizontal::light())
             .push(widget::row::with_children(vec![
-                widget::button::text("Refresh").on_press(Message::Refresh).into(),
-                widget::button::text("Previous").on_press(Message::Previous).into(),
-                widget::button::text("Play / Pause").on_press(Message::PlayPause).into(),
-                widget::button::text("Next").on_press(Message::Next).into(),
-                widget::button::text("Stop").on_press(Message::Stop).into(),
+                widget::button::text("Refresh").on_press(AppletMessage::Refresh).into(),
+                widget::button::text("Previous").on_press(AppletMessage::Previous).into(),
+                widget::button::text("Play / Pause").on_press(AppletMessage::PlayPause).into(),
+                widget::button::text("Next").on_press(AppletMessage::Next).into(),
+                widget::button::text("Stop").on_press(AppletMessage::Stop).into(),
             ]).spacing(8).align_y(Alignment::Center));
 
         self.core.applet.popup_container(content).into()
     }
 }
 
-fn source_row(source: &SourceInfo, active: bool) -> Element<'_, Message> {
-    let action: Element<'_, Message> = if active {
+fn applet_source_row(source: &SourceInfo, active: bool) -> Element<'_, AppletMessage> {
+    let action: Element<'_, AppletMessage> = if active {
         widget::text("Active").into()
     } else {
-        widget::button::text("Select").on_press(Message::SelectSource(source.name.clone())).into()
+        widget::button::text("Select").on_press(AppletMessage::SelectSource(source.name.clone())).into()
     };
 
     widget::container(
@@ -362,7 +550,7 @@ fn set_active_source(config: &mut Config, source: &str) -> Result<()> {
 }
 
 fn send_to_active(config: &Config, command: &str) -> Result<()> {
-    let source = config.active_source.as_deref().ok_or_else(|| anyhow!("No active source selected. Click the applet and choose one source first."))?;
+    let source = config.active_source.as_deref().ok_or_else(|| anyhow!("No active source selected. Choose one source first."))?;
     let status = Command::new("playerctl").arg("--player").arg(source).arg(command).status().with_context(|| format!("Failed to execute playerctl for source '{source}'"))?;
     if status.success() { Ok(()) } else { Err(anyhow!("playerctl command failed for source '{source}'")) }
 }
