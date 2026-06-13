@@ -1,6 +1,6 @@
 # Tihulu Media Source Controller
 
-A Pop!_OS / COSMIC applet concept for choosing exactly which media source your keyboard media keys control.
+A Pop!_OS / COSMIC media source controller for choosing exactly which media source your keyboard media keys control.
 
 The idea is simple: choose one active source, then **Previous**, **Play/Pause**, **Next**, **Stop**, **Volume**, and **Mute** always control that selected source.
 
@@ -10,7 +10,23 @@ The idea is simple: choose one active source, then **Previous**, **Play/Pause**,
 curl -fsSL https://raw.githubusercontent.com/Tihulu/tihulu-media-source-controller/main/scripts/install.sh | bash
 ```
 
-The installer works on Pop!_OS and other apt-based distributions. It installs the required packages, clones the repository, builds the release binary, and installs it to `/usr/local/bin`.
+The installer works on Pop!_OS and other apt-based distributions. It installs the required packages, builds the release binary, installs it to `/usr/bin`, and installs the COSMIC applet desktop entry to `/usr/share/applications`.
+
+## Add it to the COSMIC panel
+
+After installing, open:
+
+```text
+Settings → Desktop → Panel → Add applet
+```
+
+Search for:
+
+```text
+Tihulu Media Source Controller
+```
+
+If it does not appear immediately, restart the panel or log out and back in.
 
 ## Why this exists
 
@@ -26,15 +42,15 @@ This project is designed to make that behavior explicit and predictable:
 
 ## Current status
 
-This repository currently contains the first backend prototype and the UI design direction.
+This repository contains the first working GUI shell and backend prototype.
 
-The backend uses `playerctl` to target MPRIS players by name. The next step is the native COSMIC panel applet UI.
+The backend uses `playerctl` to target MPRIS players by name. The desktop entry is marked as a COSMIC applet so it appears in the COSMIC panel applet picker.
 
-## Planned applet behavior
+## Applet behavior
 
 ### Panel icon
 
-The panel applet should show compact media controls directly in the panel:
+The applet should show compact media controls directly in the panel:
 
 ```text
 | Previous | Play/Pause | Next |
@@ -49,7 +65,6 @@ Clicking the applet opens a source picker:
 - Active Source
 - Available Sources
 - Apps: Spotify, VLC, Firefox, YouTube Music, etc.
-- Devices: Bluetooth headphones and system output
 - Manage Sources
 
 ### Now Playing panel
@@ -64,7 +79,7 @@ The Now Playing view shows:
 
 ### Settings
 
-Settings should stay minimal:
+Settings stay minimal:
 
 - Remember last source
 - Show notification on source change
@@ -86,6 +101,12 @@ cd tihulu-media-source-controller
 ```
 
 ## Quick local usage
+
+Open the GUI:
+
+```bash
+tihulu-media-source-controller
+```
 
 List available media sources:
 
@@ -116,7 +137,7 @@ tihulu-media-source-controller cycle
 
 ## Recommended keyboard shortcuts
 
-Until the native COSMIC applet is implemented, bind these commands in desktop keyboard shortcuts:
+Until direct media-key interception is implemented, bind these commands in desktop keyboard shortcuts:
 
 | Action | Command |
 | --- | --- |
@@ -126,27 +147,34 @@ Until the native COSMIC applet is implemented, bind these commands in desktop ke
 | Stop | `tihulu-media-source-controller stop` |
 | Next Source | `tihulu-media-source-controller cycle` |
 
-## Architecture
+## Troubleshooting
 
-The project should evolve in three layers:
+Check that the applet desktop entry is installed:
 
-1. **Backend router**  
-   Stores the active source and forwards media commands to it.
+```bash
+ls /usr/share/applications/com.github.tihulu.TihuluMediaSourceController.desktop
+```
 
-2. **MPRIS source model**  
-   Detects player name, playback status, metadata, track position, and icon.
+Check that it is marked as a COSMIC applet:
 
-3. **COSMIC panel applet**  
-   Shows the compact panel controls, source picker, Now Playing view, and settings.
+```bash
+grep -E 'X-CosmicApplet|Categories|Exec' /usr/share/applications/com.github.tihulu.TihuluMediaSourceController.desktop
+```
 
-For the long-term version, the best approach is an MPRIS proxy/router: the desktop sends media key events to the controller, and the controller forwards those events to the selected player.
+Expected output includes:
+
+```text
+Categories=COSMIC
+Exec=tihulu-media-source-controller
+X-CosmicApplet=true
+```
 
 ## Development
 
 ```bash
 cargo fmt
 cargo clippy --all-targets --all-features -- -D warnings
-cargo test
+cargo build --release
 ```
 
 ## License
