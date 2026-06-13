@@ -1,9 +1,0 @@
-[Desktop Entry]
-Name=COSMIC Media Source Controller
-Comment=Route media keys to one selected media source
-Exec=cosmic-media-source-controller list
-Icon=multimedia-player
-Terminal=true
-Type=Application
-Categories=Audio;Utility;
-Keywords=media;keys;mpris;cosmic;pop-os;playerctl;
