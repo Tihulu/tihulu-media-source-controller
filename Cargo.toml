@@ -1,10 +1,10 @@
 [package]
 name = "tihulu-media-source-controller"
-version = "0.1.0"
+version = "0.2.0"
 edition = "2021"
 authors = ["Tihulu"]
 license = "GPL-3.0-or-later"
-description = "A Pop!_OS/COSMIC media key source controller that routes media keys to one selected app or device."
+description = "A COSMIC panel applet that routes media keys to one selected media source."
 repository = "https://github.com/Tihulu/tihulu-media-source-controller"
 readme = "README.md"
 
@@ -15,3 +15,13 @@ dirs = "5.0"
 notify-rust = "4.11"
 serde = { version = "1.0", features = ["derive"] }
 toml = "0.8"
+
+[dependencies.libcosmic]
+git = "https://github.com/pop-os/libcosmic.git"
+features = [
+    "applet",
+    "applet-token",
+    "dbus-config",
+    "wayland",
+    "winit",
+]
