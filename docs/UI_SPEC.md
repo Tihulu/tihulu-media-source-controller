@@ -2,7 +2,7 @@
 
 ## Product name
 
-COSMIC Media Source Controller
+Tihulu Media Source Controller
 
 ## Main rule
 
