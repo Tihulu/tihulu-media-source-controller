@@ -95,13 +95,21 @@ enum Message {
 }
 
 fn main() -> cosmic::iced::Result {
-    if std::env::args_os().len() > 1 {
+    let cli_subcommand = std::env::args().nth(1).is_some_and(|arg| {
+        matches!(
+            arg.as_str(),
+            "list" | "active" | "set" | "play-pause" | "next" | "previous" | "stop" | "cycle" | "config-path"
+        )
+    });
+
+    if cli_subcommand {
         if let Err(error) = run_cli() {
             eprintln!("{error}");
             std::process::exit(1);
         }
         return Ok(());
     }
+
     cosmic::applet::run::<AppModel>(())
 }
 
