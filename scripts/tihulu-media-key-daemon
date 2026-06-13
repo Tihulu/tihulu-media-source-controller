@@ -1,0 +1,175 @@
+#!/usr/bin/env python3
+"""Route Linux media keys to Tihulu Media Source Controller.
+
+This daemon listens to every readable /dev/input/event* device that reports
+media keys. By default it does NOT grab devices, so it is safe but the desktop
+may still also receive the same key. Set TMSC_MEDIA_KEY_GRAB=1 only after you
+know the selected devices are safe to grab.
+"""
+
+import os
+import selectors
+import signal
+import subprocess
+import sys
+import time
+from typing import Dict, Iterable, List, Optional, Tuple
+
+try:
+    from evdev import InputDevice, ecodes, list_devices
+except Exception as error:  # pragma: no cover
+    print(f"python3-evdev is required: {error}", file=sys.stderr)
+    print("Install it with: sudo apt install python3-evdev", file=sys.stderr)
+    sys.exit(1)
+
+APP_COMMAND = os.environ.get("TMSC_COMMAND", "/usr/bin/tihulu-media-source-controller")
+GRAB = os.environ.get("TMSC_MEDIA_KEY_GRAB", "0") == "1"
+DEVICE_FILTER = os.environ.get("TMSC_MEDIA_KEY_DEVICES", "").strip()
+DEBOUNCE_SECONDS = float(os.environ.get("TMSC_MEDIA_KEY_DEBOUNCE", "0.18"))
+
+KEY_ACTIONS = {
+    ecodes.KEY_PLAYPAUSE: "play-pause",
+    ecodes.KEY_PLAYCD: "play-pause",
+    ecodes.KEY_PLAY: "play-pause",
+    ecodes.KEY_PAUSE: "play-pause",
+    ecodes.KEY_NEXTSONG: "next",
+    ecodes.KEY_PREVIOUSSONG: "previous",
+    ecodes.KEY_STOPCD: "stop",
+    ecodes.KEY_STOP: "stop",
+}
+
+RUNNING = True
+
+
+def log(message: str) -> None:
+    print(message, flush=True)
+
+
+def stop(_signum, _frame) -> None:
+    global RUNNING
+    RUNNING = False
+
+
+def wanted_paths() -> Optional[List[str]]:
+    if not DEVICE_FILTER:
+        return None
+    return [path.strip() for path in DEVICE_FILTER.split(":") if path.strip()]
+
+
+def key_capabilities(dev: InputDevice) -> Iterable[int]:
+    caps = dev.capabilities().get(ecodes.EV_KEY, [])
+    for key in caps:
+        if isinstance(key, tuple):
+            yield key[0]
+        else:
+            yield key
+
+
+def is_candidate(dev: InputDevice) -> bool:
+    keys = set(key_capabilities(dev))
+    return any(key in keys for key in KEY_ACTIONS)
+
+
+def open_devices() -> List[InputDevice]:
+    paths = wanted_paths() or sorted(list_devices())
+    devices: List[InputDevice] = []
+
+    for path in paths:
+        try:
+            dev = InputDevice(path)
+        except PermissionError:
+            log(f"skip {path}: permission denied; add user to input group and log out/in")
+            continue
+        except FileNotFoundError:
+            log(f"skip {path}: not found")
+            continue
+        except OSError as error:
+            log(f"skip {path}: {error}")
+            continue
+
+        if not is_candidate(dev):
+            dev.close()
+            continue
+
+        if GRAB:
+            try:
+                dev.grab()
+                log(f"grabbed {path} [{dev.name}]")
+            except OSError as error:
+                log(f"could not grab {path} [{dev.name}]: {error}")
+        else:
+            log(f"listening {path} [{dev.name}]")
+
+        devices.append(dev)
+
+    return devices
+
+
+def run_action(action: str, source: str) -> None:
+    log(f"{source}: {action}")
+    try:
+        subprocess.Popen(
+            [APP_COMMAND, action],
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            start_new_session=True,
+        )
+    except Exception as error:
+        log(f"failed to run {APP_COMMAND} {action}: {error}")
+
+
+def main() -> int:
+    signal.signal(signal.SIGTERM, stop)
+    signal.signal(signal.SIGINT, stop)
+
+    devices = open_devices()
+    if not devices:
+        log("no readable media-key input devices found")
+        return 1
+
+    selector = selectors.DefaultSelector()
+    for dev in devices:
+        selector.register(dev.fd, selectors.EVENT_READ, dev)
+
+    last_seen: Dict[Tuple[str, int], float] = {}
+    log(f"media-key daemon running; grab={'on' if GRAB else 'off'}")
+
+    while RUNNING:
+        for key, _mask in selector.select(timeout=0.5):
+            dev: InputDevice = key.data
+            try:
+                events = dev.read()
+            except OSError as error:
+                log(f"lost {dev.path} [{dev.name}]: {error}")
+                try:
+                    selector.unregister(dev.fd)
+                except Exception:
+                    pass
+                continue
+
+            for event in events:
+                if event.type != ecodes.EV_KEY or event.value != 1:
+                    continue
+                action = KEY_ACTIONS.get(event.code)
+                if not action:
+                    continue
+
+                now = time.monotonic()
+                event_key = (dev.path, event.code)
+                if now - last_seen.get(event_key, 0.0) < DEBOUNCE_SECONDS:
+                    continue
+                last_seen[event_key] = now
+                run_action(action, f"{dev.path} [{dev.name}]")
+
+    for dev in devices:
+        if GRAB:
+            try:
+                dev.ungrab()
+            except Exception:
+                pass
+        dev.close()
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())
