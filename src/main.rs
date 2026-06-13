@@ -4,10 +4,11 @@ use notify_rust::Notification;
 use serde::{Deserialize, Serialize};
 use std::{fs, path::PathBuf, process::Command};
 
-const APP_NAME: &str = "COSMIC Media Source Controller";
+const APP_NAME: &str = "Tihulu Media Source Controller";
+const APP_COMMAND: &str = "tihulu-media-source-controller";
 
 #[derive(Parser, Debug)]
-#[command(name = "cosmic-media-source-controller")]
+#[command(name = "tihulu-media-source-controller")]
 #[command(about = "Route Linux media keys to one selected media source", long_about = None)]
 struct Cli {
     #[command(subcommand)]
@@ -95,7 +96,7 @@ fn main() -> Result<()> {
 
 fn config_path() -> Result<PathBuf> {
     let base = dirs::config_dir().ok_or_else(|| anyhow!("Could not find user config directory"))?;
-    Ok(base.join("cosmic-media-source-controller").join("config.toml"))
+    Ok(base.join("tihulu-media-source-controller").join("config.toml"))
 }
 
 fn load_config() -> Result<Config> {
@@ -169,7 +170,7 @@ fn send_to_active(config: &Config, command: &str) -> Result<()> {
     let source = config
         .active_source
         .as_deref()
-        .ok_or_else(|| anyhow!("No active source selected. Run: cosmic-media-source-controller set <source>"))?;
+        .ok_or_else(|| anyhow!("No active source selected. Run: {APP_COMMAND} set <source>"))?;
 
     let status = Command::new("playerctl")
         .arg("--player")
